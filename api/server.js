@@ -41,19 +41,19 @@ server.delete('/todos/:id', (req, res) => {
 // Получение данных по ИНН
 
 server.get('/delivery/get-by-inn', async (req, res) => {
+    const { inn } = req.query;
     try {
-        const { inn } = req.query;
         // Получаем основную информацию о доставке
         const delivery = await db('delivery')
             .where({ inn })
             .first()
             .select('id', 'inn', 'client');
         // console.log(delivery);
-        // if (!delivery) {
-        //     return res.status(404).json({
-        //         error: 'Данные не найдены для указанного ИНН'
-        //     });
-        // }
+        if (!delivery) {
+            return res.status(404).json({
+                error: 'Данные не найдены для указанного ИНН'
+            });
+        }
 
         // Получаем связанные адреса доставки
         const addresses = delivery
@@ -70,13 +70,14 @@ server.get('/delivery/get-by-inn', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({
+            inn,
             addresses: [] // всегда возвращать массив
             // error: 'Ошибка сервера при получении данных'
         });
     }
 });
 
-// Получение данных по номеру для транспортных компаний
+// // Получение данных по номеру для транспортных компаний
 
 server.get('/tk/get-by-number', async (req, res) => {
     try {
