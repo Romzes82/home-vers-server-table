@@ -77,56 +77,130 @@ server.get('/delivery/get-by-inn', async (req, res) => {
     }
 });
 
-// // Получение данных по номеру для транспортных компаний
+// Получение данных по массиву номеров для транспортных компаний
 
-server.get('/tk/get-by-number', async (req, res) => {
+server.post('/tk/get-by-numbers', async (req, res) => {
     try {
-        const { number } = req.query;
-        // 1. Находим телефон и связанный филиал
-        const phoneRecord = await db('phones')
-            .where({ phone: number })
-            .first()
-            .select('branch_id');
-        if (!phoneRecord) {
-            return res.status(404).json({
-                error: 'Номер не найден в базе данных',
-            });
+        const { numbers } = req.body;
+        // Валидация входных данных
+        if (!Array.isArray(numbers) || numbers.length === 0) {
+            return res.status(400).json({ error: 'Неверный формат номеров' });
         }
-        // 2. Получаем информацию о филиале и транспортной компании
-        const branchInfo = await db('branches')
-            .where({ id: phoneRecord.branch_id })
-            .first()
-            .select('tk_id', 'address');
-        if (!branchInfo) {
-            return res.status(404).json({
-                error: 'Филиал не найден',
-            });
+        // Функция для нормализации номера
+        // const normalizeNumber = (num) => num.replace(/[-+()\s]/g, '');
+        function normalizeNumber(stringWithNumbers) {
+            const str = stringWithNumbers.match(/(?:\+|\d)[\d\-\(\) ]{7,}\d/g);
+            // const digits = str[0].replace(/\D/g, '');
+            if (!str) return [];
+            const res = [];
+            str.forEach((num) => res.push(num.replace(/\D/g, '')));
+            return res;
+            // console.log(res);
         }
-        // 3. Получаем название транспортной компании
-        const tkInfo = await db('tk')
-            .where({ id: branchInfo.tk_id })
-            .first()
-            .select('name');
-        if (!tkInfo) {
-            return res.status(404).json({
-                error: 'Транспортная компания не найдена',
-            });
+
+        // Поиск первого подходящего номера
+        for (const num of numbers) {
+            try {
+                const normalized = normalizeNumber(num);
+                const phoneRecord = await db('phones')
+                    .whereRaw(
+                        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, '-', ''), ' ', ''), '+', ''), '(', ''), ')', '') = ?",
+                        normalized
+                    )
+                    .first()
+                    .select('branch_id');
+                if (phoneRecord) {
+                    // Дальнейшая логика обработки найденного номера
+
+                    const branchInfo = await db('branches')
+                        .where({ id: phoneRecord.branch_id })
+                        .first()
+                        .select('tk_id', 'address');
+                    const tkInfo = await db('tk')
+                        .where({ id: branchInfo.tk_id })
+                        .first()
+                        .select('name');
+                    const allBranches = await db('branches')
+                        .where({ tk_id: branchInfo.tk_id })
+                        .select('address');
+                    return res.json({
+                        company: tkInfo.name,
+                        branches: allBranches.map((b) => b.address),
+                    });
+                }
+            } catch (err) {
+                console.error(`Ошибка обработки номера ${num}:`, err);
+                // Продолжаем проверять следующие номера
+            }
         }
-        // 4. Получаем все филиалы компании
-        const allBranches = await db('branches')
-            .where({ tk_id: branchInfo.tk_id })
-            .select('address');
-        // 5. Формируем ответ
-        res.json({
-            company: tkInfo.name,
-            branches: allBranches.map((b) => b.address),
+
+        // Если ни один номер не найден
+        return res.status(404).json({
+            error: 'Ни один из номеров не найден в базе данных',
         });
     } catch (err) {
         console.error(err);
         res.status(500).json({
-            error: 'Ошибка сервера при получении данных',
+            error: 'Ошибка сервера при обработке запроса',
         });
     }
 });
+
+// // Получение данных по ОДНОМУ номеру для транспортных компаний
+
+// server.get('/tk/get-by-number', async (req, res) => {
+//     try {
+//         const { number } = req.query;
+//         // 1. Находим телефон и связанный филиал
+//         const phoneRecord = await db('phones')
+//             // .where({ phone: number })
+//             // удаляем из номера -, ,+,(,)
+//             .whereRaw(
+//                 "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, '-', ''), ' ', ''), '+', ''), '(', ''), ')', '') = ?",
+//                 number
+//             )
+//             .first()
+//             .select('branch_id');
+//         if (!phoneRecord) {
+//             return res.status(404).json({
+//                 error: 'Номер не найден в базе данных',
+//             });
+//         }
+//         // 2. Получаем информацию о филиале и транспортной компании
+//         const branchInfo = await db('branches')
+//             .where({ id: phoneRecord.branch_id })
+//             .first()
+//             .select('tk_id', 'address');
+//         if (!branchInfo) {
+//             return res.status(404).json({
+//                 error: 'Филиал не найден',
+//             });
+//         }
+//         // 3. Получаем название транспортной компании
+//         const tkInfo = await db('tk')
+//             .where({ id: branchInfo.tk_id })
+//             .first()
+//             .select('name');
+//         if (!tkInfo) {
+//             return res.status(404).json({
+//                 error: 'Транспортная компания не найдена',
+//             });
+//         }
+//         // 4. Получаем все филиалы компании
+//         const allBranches = await db('branches')
+//             .where({ tk_id: branchInfo.tk_id })
+//             .select('address');
+//         // 5. Формируем ответ
+//         res.json({
+//             company: tkInfo.name,
+//             branches: allBranches.map((b) => b.address),
+//         });
+//     } catch (err) {
+//         console.error(err);
+//         res.status(500).json({
+//             error: 'Ошибка сервера при получении данных',
+//         });
+//     }
+// });
 
 module.exports = server;
