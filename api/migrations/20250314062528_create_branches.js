@@ -14,6 +14,14 @@ exports.up = async function (knex) {
             table.string('address');
             table.string('work_time');
             table.string('note_branch');
+            table
+                .real('latitude')
+                .notNullable()
+                // .check('latitude', 'lat_range', 'latitude BETWEEN -90 AND 90'); //широта
+            table
+                .real('longitude')
+                .notNullable()
+                // .check('longitude','lng_range','longitude BETWEEN -180 AND 180'); //долгота
         });
     }
 };

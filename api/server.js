@@ -38,113 +38,274 @@ server.delete('/todos/:id', (req, res) => {
     //DELETE a todo
 }); 
 
-// Получение данных по ИНН
-
-server.get('/delivery/get-by-inn', async (req, res) => {
-    const { inn } = req.query;
-    try {
-        // Получаем основную информацию о доставке
-        const delivery = await db('delivery')
-            .where({ inn })
-            .first()
-            .select('id', 'inn', 'client');
-        // console.log(delivery);
-        if (!delivery) {
-            return res.status(404).json({
-                error: 'Данные не найдены для указанного ИНН'
-            });
-        }
-
-        // Получаем связанные адреса доставки
-        const addresses = delivery
-            ? (await db('address_delivery')
-                .where({ delivery_id: delivery.id })
-                .select('address'))
-            : [];
-
-        // Формируем ответ
-        res.json({
-            inn: delivery.inn,
-            addresses: addresses.map(a => a.address) || []
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({
-            inn,
-            addresses: [] // всегда возвращать массив
-            // error: 'Ошибка сервера при получении данных'
-        });
-    }
-});
-
 // Получение данных по массиву номеров для транспортных компаний
-
 server.post('/tk/get-by-numbers', async (req, res) => {
     try {
         const { numbers } = req.body;
-        // Валидация входных данных
+
         if (!Array.isArray(numbers) || numbers.length === 0) {
             return res.status(400).json({ error: 'Неверный формат номеров' });
         }
-        // Функция для нормализации номера
-        // const normalizeNumber = (num) => num.replace(/[-+()\s]/g, '');
-        function normalizeNumber(stringWithNumbers) {
-            const str = stringWithNumbers.match(/(?:\+|\d)[\d\-\(\) ]{7,}\d/g);
-            // const digits = str[0].replace(/\D/g, '');
-            if (!str) return [];
-            const res = [];
-            str.forEach((num) => res.push(num.replace(/\D/g, '')));
-            return res;
-            // console.log(res);
-        }
 
-        // Поиск первого подходящего номера
+        const normalizeNumber = (stringWithNumbers) => {
+            const str = stringWithNumbers.match(/(?:\+|\d)[\d\-\(\) ]{7,}\d/g);
+            if (!str) return [];
+            return str.map((num) => num.replace(/\D/g, ''));
+        };
+
         for (const num of numbers) {
             try {
                 const normalized = normalizeNumber(num);
                 const phoneRecord = await db('phones')
                     .whereRaw(
                         "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, '-', ''), ' ', ''), '+', ''), '(', ''), ')', '') = ?",
-                        normalized
+                        normalized.join('') // Нормализуем номер до строки
                     )
-                    .first()
-                    .select('branch_id');
-                if (phoneRecord) {
-                    // Дальнейшая логика обработки найденного номера
+                    .first();
 
+                if (phoneRecord) {
+                    // Получаем все данные за минимальное количество запросов
                     const branchInfo = await db('branches')
                         .where({ id: phoneRecord.branch_id })
                         .first()
                         .select('tk_id', 'address');
+
+                    // Один запрос для получения данных ТК
                     const tkInfo = await db('tk')
                         .where({ id: branchInfo.tk_id })
                         .first()
-                        .select('name');
+                        .select('name', 'bid', 'marker');
+
+                    // Получаем все филиалы с координатами за один запрос
                     const allBranches = await db('branches')
                         .where({ tk_id: branchInfo.tk_id })
-                        .select('address');
+                        .select(
+                            'address',
+                            'note_branch',
+                            'work_time',
+                            'latitude as lat',
+                            'longitude as lng'
+                        );
+
+                    // Формируем координаты
+                    const coordinates = allBranches.map((branch) => ({
+                        lat: branch.lat,
+                        lng: branch.lng,
+                    }));
+                    // console.log(coordinates);
+
                     return res.json({
                         company: tkInfo.name,
+                        bid: tkInfo.bid,
+                        marker: tkInfo.marker,
                         branches: allBranches.map((b) => b.address),
+                        note: allBranches.map((b) => b.note_branch || ''),
+                        worktime: allBranches.map((b) => b.work_time),
+                        coordinates: coordinates,
                     });
                 }
             } catch (err) {
                 console.error(`Ошибка обработки номера ${num}:`, err);
-                // Продолжаем проверять следующие номера
             }
         }
 
-        // Если ни один номер не найден
         return res.status(404).json({
             error: 'Ни один из номеров не найден в базе данных',
         });
     } catch (err) {
         console.error(err);
+
         res.status(500).json({
             error: 'Ошибка сервера при обработке запроса',
         });
     }
 });
+
+
+// Получение данных по ИНН
+server.get('/delivery/get-by-inn', async (req, res) => {
+    const { inn } = req.query;
+
+    try {
+        //сокращаем обращение к серверу с двух до одного
+        const [delivery, addressData] = await Promise.all([
+            db('delivery').where({ inn }).first().select('id', 'inn', 'client'),
+            db('address_delivery')
+                .where(
+                    'delivery_id',
+                    db('delivery').where({ inn }).select('id')
+                )
+                .select('address', 'latitude as lat', 'longitude as lng'),
+        ]);
+
+        // Получаем основную информацию о доставке
+        // const delivery = await db('delivery')
+        //     .where({ inn })
+        //     .first()
+        //     .select('id', 'inn', 'client');
+        if (!delivery) {
+            return res.status(404).json({
+                error: 'Данные не найдены для указанного ИНН',
+            });
+        }
+
+        // Получаем связанные адреса с координатами
+        // const addressData = await db('address_delivery')
+        //     .where({ delivery_id: delivery.id })
+        //     .select('address', 'latitude as lat', 'longitude as lng');
+
+        // Формируем ответ
+        res.json({
+            inn: delivery.inn,
+            addresses: addressData.map((a) => a.address),
+            coordinates: addressData.map(({ lat, lng }) => ({ lat, lng })),
+        });
+    } catch (err) {
+        console.error(err);
+
+        res.status(500).json({
+            inn: inn || '',
+            addresses: [],
+            coordinates: [],
+            error: 'Ошибка сервера при получении данных',
+        });
+    }
+});
+
+module.exports = server;
+
+// server.get('/delivery/get-by-inn', async (req, res) => {
+//     const { inn } = req.query;
+//     try {
+//         // Получаем основную информацию о доставке
+//         const delivery = await db('delivery')
+//             .where({ inn })
+//             .first()
+//             .select('id', 'inn', 'client');
+//         // console.log(delivery);
+//         if (!delivery) {
+//             return res.status(404).json({
+//                 error: 'Данные не найдены для указанного ИНН'
+//             });
+//         }
+
+//         // Получаем связанные адреса доставки
+//         const addresses = delivery
+//             ? (await db('address_delivery')
+//                 .where({ delivery_id: delivery.id })
+//                 .select('address'))
+//             : [];
+
+//         // Формируем ответ
+//         res.json({
+//             inn: delivery.inn,
+//             addresses: addresses.map(a => a.address) || []
+//         });
+//     } catch (err) {
+//         console.error(err);
+//         res.status(500).json({
+//             inn,
+//             addresses: [] // всегда возвращать массив
+//             // error: 'Ошибка сервера при получении данных'
+//         });
+//     }
+// });
+
+
+// // Получение данных по массиву номеров для транспортных компаний
+
+// server.post('/tk/get-by-numbers', async (req, res) => {
+//     try {
+//         const { numbers } = req.body;
+//         // Валидация входных данных
+//         if (!Array.isArray(numbers) || numbers.length === 0) {
+//             return res.status(400).json({ error: 'Неверный формат номеров' });
+//         }
+//         // Функция для нормализации номера
+//         // const normalizeNumber = (num) => num.replace(/[-+()\s]/g, '');
+//         function normalizeNumber(stringWithNumbers) {
+//             const str = stringWithNumbers.match(/(?:\+|\d)[\d\-\(\) ]{7,}\d/g);
+//             // const digits = str[0].replace(/\D/g, '');
+//             if (!str) return [];
+//             const res = [];
+//             str.forEach((num) => res.push(num.replace(/\D/g, '')));
+//             return res;
+//             // console.log(res);
+//         }
+
+//         // Поиск первого подходящего номера
+//         for (const num of numbers) {
+//             try {
+//                 const normalized = normalizeNumber(num);
+//                 const phoneRecord = await db('phones')
+//                     .whereRaw(
+//                         "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, '-', ''), ' ', ''), '+', ''), '(', ''), ')', '') = ?",
+//                         normalized
+//                     )
+//                     .first()
+//                     .select('branch_id');
+//                 if (phoneRecord) {
+//                     // Дальнейшая логика обработки найденного номера
+
+//                     const branchInfo = await db('branches')
+//                         .where({ id: phoneRecord.branch_id })
+//                         .first()
+//                         .select('tk_id', 'address');
+//                     const tkInfo = await db('tk')
+//                         .where({ id: branchInfo.tk_id })
+//                         .first()
+//                         .select('name');
+//                     const tkBid = await db('tk')
+//                         .where({ id: branchInfo.tk_id })
+//                         .first()
+//                         .select('bid');
+//                     const tkMarker = await db('tk')
+//                         .where({ id: branchInfo.tk_id })
+//                         .first()
+//                         .select('marker');                     
+//                     const allBranches = await db('branches')
+//                         .where({ tk_id: branchInfo.tk_id })
+//                         .select('address');
+//                     const allBranchesNotes = await db('branches')
+//                             .where({ tk_id: branchInfo.tk_id })
+//                             .select('note_branch');
+//                     const allBranchesWorkTime = await db('branches')
+//                         .where({ tk_id: branchInfo.tk_id })
+//                         .select('work_time');
+//                     // const allBranchesLat = await db('branches')
+//                     //     .where({ tk_id: branchInfo.tk_id })
+//                     //     .select('latitude');
+//                     // const allBranchesLng = await db('branches')
+//                     //     .where({ tk_id: branchInfo.tk_id })
+//                     //     .select('longitude');                    
+                    
+//                     return res.json({
+//                         company: tkInfo.name,
+//                         bid: tkBid.bid,
+//                         marker: tkMarker.marker,
+//                         branches: allBranches.map((b) => b.address),
+//                         note: allBranchesNotes.map((b) => b.note_branch),
+//                         worktime: allBranchesWorkTime.map((b) => b.work_time),
+//                         //  coordinates: allBranchesLat.map((b) => b.latitude),
+//                     });
+//                 }
+//             } catch (err) {
+//                 console.error(`Ошибка обработки номера ${num}:`, err);
+//                 // Продолжаем проверять следующие номера
+//             }
+//         }
+
+//         // Если ни один номер не найден
+//         return res.status(404).json({
+//             error: 'Ни один из номеров не найден в базе данных',
+//         });
+//     } catch (err) {
+//         console.error(err);
+//         res.status(500).json({
+//             error: 'Ошибка сервера при обработке запроса',
+//         });
+//     }
+// });
 
 // // Получение данных по ОДНОМУ номеру для транспортных компаний
 
@@ -203,4 +364,3 @@ server.post('/tk/get-by-numbers', async (req, res) => {
 //     }
 // });
 
-module.exports = server;

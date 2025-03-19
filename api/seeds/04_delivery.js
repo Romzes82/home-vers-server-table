@@ -1,6 +1,6 @@
 // /**
 //  * @param { import("knex").Knex } knex
-//  * @returns { Promise<void> } 
+//  * @returns { Promise<void> }
 //  */
 // exports.seed = async function(knex) {
 //   // Deletes ALL existing entries
@@ -19,7 +19,11 @@ exports.seed = async function (knex) {
 
     // Вставка данных
     await knex('delivery').insert([
-        { id: 1, inn: '7722753969', client: 'ООО "ВсеИнструменты.ру"' },
+        {
+            id: 1,
+            inn: '7722753969',
+            client: 'ООО "ВсеИнструменты.ру"',
+        },
         {
             id: 2,
             inn: '7728471978',
@@ -32,16 +36,22 @@ exports.seed = async function (knex) {
             delivery_id: 1,
             address: 'Константиново, Объездное ш., с03',
             date: '01012024',
+            latitude: 55.650898, //широта
+            longitude: 37.860358, //долгота
         },
         {
             delivery_id: 1,
             address: 'Мытищи',
             date: '02022024',
+            latitude: 55.650098, //широта
+            longitude: 37.860058, //долгота
         },
         {
             delivery_id: 2,
             address: 'Москва ул. Бутлерова д.22',
             date: '03032024',
+            latitude: 55.650098, //широта
+            longitude: 37.860000, //долгота
         },
     ]);
 };

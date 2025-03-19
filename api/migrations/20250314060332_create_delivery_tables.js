@@ -17,6 +17,14 @@ exports.up = async function (knex) {
             .onDelete('CASCADE');
         table.string('address').notNullable();
         table.string('date').notNullable(); // Формат: DDMMYYYY
+        table
+            .real('latitude')
+            .notNullable()
+            // .checkBetween([-90,90]); //широта
+        table
+            .real('longitude')
+            .notNullable()
+            // .checkBetween([-180,180]); //долгота
     });
 };
 

@@ -15,8 +15,8 @@
 exports.seed = async function (knex) {
     await knex('tk').del();
     await knex('tk').insert([
-        { id: 1, name: 'тк Деловые Линии' },
-        { id: 2, name: 'тк Артэк' },
-        { id: 3, name: 'тк Азимут' },
+        { id: 1, name: 'тк Деловые Линии', bid: 0, marker: 0 },
+        { id: 2, name: 'тк Артэк', bid: 0, marker: 0 },
+        { id: 3, name: 'тк Азимут', bid: 0, marker: 0 },
     ]);
 };
