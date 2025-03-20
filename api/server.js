@@ -209,6 +209,171 @@ server.get('/delivery/get-by-inn', async (req, res) => {
     }
 });
 
+// Получение данных по массиву номеров для транспортных компаний
+server.post('/tk/get-by-numbers', async (req, res) => {
+    try {
+        const { numbers } = req.body;
+
+        if (!Array.isArray(numbers) || numbers.length === 0) {
+            return res.status(400).json({ error: 'Неверный формат номеров' });
+        }
+
+        const normalizeNumber = (stringWithNumbers) => {
+            const str = stringWithNumbers.match(/(?:\+|\d)[\d\-\(\) ]{7,}\d/g);
+            if (!str) return [];
+            return str.map((num) => num.replace(/\D/g, ''));
+        };
+
+        for (const num of numbers) {
+            try {
+                const normalized = normalizeNumber(num);
+                const phoneRecord = await db('phones')
+                    .whereRaw(
+                        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, '-', ''), ' ', ''), '+', ''), '(', ''), ')', '') = ?",
+                        normalized.join('') // Нормализуем номер до строки
+                    )
+                    .first();
+
+                if (phoneRecord) {
+                    // Получаем все данные за минимальное количество запросов
+                    const branchInfo = await db('branches')
+                        .where({ id: phoneRecord.branch_id })
+                        .first()
+                        .select('tk_id', 'address');
+
+                    // Один запрос для получения данных ТК
+                    const tkInfo = await db('tk')
+                        .where({ id: branchInfo.tk_id })
+                        .first()
+                        .select('name', 'bid', 'marker');
+
+                    // Получаем все филиалы с координатами за один запрос
+                    const allBranches = await db('branches')
+                        .where({ tk_id: branchInfo.tk_id })
+                        .select(
+                            'id',
+                            'address',
+                            'note_branch',
+                            'work_time',
+                            'latitude as lat',
+                            'longitude as lng'
+                        );
+
+                    // Получаем ВСЕ телефоны для этих филиалов
+                    const branchIds = allBranches.map((b) => b.id);
+
+                    const allPhones = await db('phones')
+                        .whereIn('branch_id', branchIds)
+                        .select(
+                            'branch_id',
+                            'phone',
+                            'extension',
+                            'note_phone'
+                        );
+
+                    // Формируем координаты
+                    const coordinates = allBranches.map((branch) => ({
+                        lat: branch.lat,
+                        lng: branch.lng,
+                    }));
+                    // Формируем телефоны
+                    // const phones = allPhones.map((p) => ({
+                    //     phone: p.phone,
+                    //     extension: p.extension || '',
+                    //     note_phone: p.note_phone || '',
+                    // }));
+
+                    // Группируем телефоны по branch_id
+                    const phonesByBranch = allBranches.map((branch) => {
+                        return allPhones
+                            .filter((phone) => phone.branch_id === branch.id)
+                            .map((phone) => ({
+                                phone: phone.phone,
+                                extension: phone.extension || '',
+                                note_phone: phone.note_phone || '',
+                            }));
+                    });
+
+                    return res.json({
+                        company: tkInfo.name,
+                        bid: tkInfo.bid,
+                        marker: tkInfo.marker,
+                        branches: allBranches.map((b) => b.address),
+                        note: allBranches.map((b) => b.note_branch || ''),
+                        worktime: allBranches.map((b) => b.work_time),
+                        coordinates: coordinates,
+                        phones: phonesByBranch, // массив массивов с объектами-телефонами по филиалам
+                    });
+                }
+            } catch (err) {
+                console.error(`Ошибка обработки номера ${num}:`, err);
+            }
+        }
+
+        return res.status(404).json({
+            error: 'Ни один из номеров не найден в базе данных',
+        });
+    } catch (err) {
+        console.error(err);
+
+        res.status(500).json({
+            error: 'Ошибка сервера при обработке запроса',
+        });
+    }
+});
+
+// Получение данных по Названию клиента
+server.get('/delivery/get-by-client', async (req, res) => {
+    const { client } = req.query;
+
+    try {
+        //сокращаем обращение к серверу с двух до одного
+        const [delivery, addressData] = await Promise.all([
+            db('delivery')
+                .where({ client })
+                .first()
+                .select('id', 'inn', 'client'),
+            db('address_delivery')
+                // выбираем данные и делаем сортировку по дате
+                .where(
+                    'delivery_id',
+                    db('delivery').where({ client }).select('id')
+                )
+                .orderBy('date', 'asc')
+                .select(
+                    'address',
+                    'date',
+                    'latitude as lat',
+                    'longitude as lng'
+                ),
+        ]);
+
+        if (!delivery) {
+            return res.status(404).json({
+                error: 'Данные не найдены для указанного ИНН',
+            });
+        }
+
+        // Формируем ответ
+        res.json({
+            client: delivery.client,
+            addresses: addressData.map((a) => a.address),
+            history: addressData.map((a) => a.date),
+            coordinates: addressData.map(({ lat, lng }) => ({ lat, lng })),
+        });
+    } catch (err) {
+        console.error(err);
+
+        res.status(500).json({
+            client: client || '',
+            addresses: [],
+            coordinates: [],
+            history: [],
+            error: 'Ошибка сервера при получении данных',
+        });
+    }
+});
+
 module.exports = server;
 
 // server.get('/delivery/get-by-inn', async (req, res) => {
