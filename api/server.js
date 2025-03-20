@@ -12,7 +12,7 @@ server.use(express.json());
 
 server.get('/', (req, res) => {
     res.send('Welcome to the Table app server!');
-}); 
+});
 
 server.get('/delivery', async (req, res) => {
     //GET all todos
@@ -20,23 +20,22 @@ server.get('/delivery', async (req, res) => {
         console.log(req.query);
         const delivery = await db('delivery');
         res.json(delivery);
-     }
-    catch(err) { 
+    } catch (err) {
         console.log(err);
     }
-}); 
+});
 
 server.post('/todos', (req, res) => {
     //POST a todo
-}); 
+});
 
 server.put('/todos/:id', (req, res) => {
     //UPDATE a todo
-}); 
+});
 
 server.delete('/todos/:id', (req, res) => {
     //DELETE a todo
-}); 
+});
 
 // Получение данных по массиву номеров для транспортных компаний
 server.post('/tk/get-by-numbers', async (req, res) => {
@@ -80,6 +79,7 @@ server.post('/tk/get-by-numbers', async (req, res) => {
                     const allBranches = await db('branches')
                         .where({ tk_id: branchInfo.tk_id })
                         .select(
+                            'id',
                             'address',
                             'note_branch',
                             'work_time',
@@ -87,12 +87,40 @@ server.post('/tk/get-by-numbers', async (req, res) => {
                             'longitude as lng'
                         );
 
+                    // Получаем ВСЕ телефоны для этих филиалов
+                    const branchIds = allBranches.map((b) => b.id);
+
+                    const allPhones = await db('phones')
+                        .whereIn('branch_id', branchIds)
+                        .select(
+                            'branch_id',
+                            'phone',
+                            'extension',
+                            'note_phone'
+                        );
+
                     // Формируем координаты
                     const coordinates = allBranches.map((branch) => ({
                         lat: branch.lat,
                         lng: branch.lng,
                     }));
-                    // console.log(coordinates);
+                    // Формируем телефоны
+                    // const phones = allPhones.map((p) => ({
+                    //     phone: p.phone,
+                    //     extension: p.extension || '',
+                    //     note_phone: p.note_phone || '',
+                    // }));
+
+                    // Группируем телефоны по branch_id
+                    const phonesByBranch = allBranches.map((branch) => {
+                        return allPhones
+                            .filter((phone) => phone.branch_id === branch.id)
+                            .map((phone) => ({
+                                phone: phone.phone,
+                                extension: phone.extension || '',
+                                note_phone: phone.note_phone || '',
+                            }));
+                    });
 
                     return res.json({
                         company: tkInfo.name,
@@ -102,6 +130,7 @@ server.post('/tk/get-by-numbers', async (req, res) => {
                         note: allBranches.map((b) => b.note_branch || ''),
                         worktime: allBranches.map((b) => b.work_time),
                         coordinates: coordinates,
+                        phones: phonesByBranch, // массив массивов с объектами-телефонами по филиалам
                     });
                 }
             } catch (err) {
@@ -121,7 +150,6 @@ server.post('/tk/get-by-numbers', async (req, res) => {
     }
 });
 
-
 // Получение данных по ИНН
 server.get('/delivery/get-by-inn', async (req, res) => {
     const { inn } = req.query;
@@ -131,11 +159,18 @@ server.get('/delivery/get-by-inn', async (req, res) => {
         const [delivery, addressData] = await Promise.all([
             db('delivery').where({ inn }).first().select('id', 'inn', 'client'),
             db('address_delivery')
+                // выбираем данные и делаем сортировку по дате
                 .where(
                     'delivery_id',
                     db('delivery').where({ inn }).select('id')
                 )
-                .select('address', 'latitude as lat', 'longitude as lng'),
+                .orderBy('date', 'asc')
+                .select(
+                    'address',
+                    'date',
+                    'latitude as lat',
+                    'longitude as lng'
+                ),
         ]);
 
         // Получаем основную информацию о доставке
@@ -158,6 +193,7 @@ server.get('/delivery/get-by-inn', async (req, res) => {
         res.json({
             inn: delivery.inn,
             addresses: addressData.map((a) => a.address),
+            history: addressData.map((a) => a.date),
             coordinates: addressData.map(({ lat, lng }) => ({ lat, lng })),
         });
     } catch (err) {
@@ -167,6 +203,7 @@ server.get('/delivery/get-by-inn', async (req, res) => {
             inn: inn || '',
             addresses: [],
             coordinates: [],
+            history: [],
             error: 'Ошибка сервера при получении данных',
         });
     }
@@ -210,7 +247,6 @@ module.exports = server;
 //         });
 //     }
 // });
-
 
 // // Получение данных по массиву номеров для транспортных компаний
 
@@ -262,7 +298,7 @@ module.exports = server;
 //                     const tkMarker = await db('tk')
 //                         .where({ id: branchInfo.tk_id })
 //                         .first()
-//                         .select('marker');                     
+//                         .select('marker');
 //                     const allBranches = await db('branches')
 //                         .where({ tk_id: branchInfo.tk_id })
 //                         .select('address');
@@ -277,8 +313,8 @@ module.exports = server;
 //                     //     .select('latitude');
 //                     // const allBranchesLng = await db('branches')
 //                     //     .where({ tk_id: branchInfo.tk_id })
-//                     //     .select('longitude');                    
-                    
+//                     //     .select('longitude');
+
 //                     return res.json({
 //                         company: tkInfo.name,
 //                         bid: tkBid.bid,
@@ -363,4 +399,3 @@ module.exports = server;
 //         });
 //     }
 // });
-

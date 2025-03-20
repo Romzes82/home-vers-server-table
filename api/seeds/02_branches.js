@@ -16,6 +16,7 @@ exports.seed = async function (knex) {
     await knex('branches').del();
     await knex('branches').insert([
         {
+            id: 1,
             tk_id: 1,
             address: 'г. Котельники, Дзержинское ш., 14',
             note_branch: '',
@@ -24,6 +25,7 @@ exports.seed = async function (knex) {
             longitude: 37.862358, //долгота
         },
         {
+            id: 2,
             tk_id: 1,
             address: 'Москва, ул. Подольских Курсантов, д. 17, к. 2',
             note_branch: '',
@@ -32,6 +34,7 @@ exports.seed = async function (knex) {
             longitude: 37.589012,
         },
         {
+            id: 3,
             tk_id: 2,
             address: 'Москва, 2ой Вязовский проезд, д. 16',
             note_branch: 'на территории строение № 9',
@@ -40,6 +43,7 @@ exports.seed = async function (knex) {
             longitude: 37.634567,
         },
         {
+            id: 4,
             tk_id: 3,
             address: 'МО, Старая Купавна, ул. Дорожная, стр. 15',
             note_branch: 'заезд с ул. Рабочая, поворот напротив часовни',
