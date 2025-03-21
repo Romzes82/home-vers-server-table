@@ -374,6 +374,24 @@ server.get('/delivery/get-by-client', async (req, res) => {
     }
 });
 
+// Роут для получения списка ТК в алфавитном порядке
+
+server.get('/tk/get-names', async (req, res) => {
+    try {
+        // Запрос к базе данных для получения списка ТК, отсортированного по полю `name`
+        const tkList = await db('tk')
+            .pluck('name') // Выбираем массив значений поле `name`
+            .orderBy('name', 'asc'); // Сортируем по алфавиту (asc - по возрастанию)
+        // Отправляем результат клиенту
+        res.status(200).json(tkList);
+    } catch (error) {
+        console.error('Ошибка при получении списка ТК:', error);
+        res.status(500).json({
+            error: 'Ошибка сервера при получении списка ТК',
+        });
+    }
+});
+
 module.exports = server;
 
 // server.get('/delivery/get-by-inn', async (req, res) => {
