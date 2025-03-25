@@ -162,9 +162,8 @@ server.get('/tk/get-by-name', async (req, res) => {
 
         // Поиск ТК по названию (регистронезависимый поиск)
         const tk = await db('tk')
-            .whereRaw('LOWER(name) LIKE ?', [`%${name.toLowerCase()}%`])
-            // db('delivery').where({ inn }).first().select('id', 'inn', 'client'),
-            // where({ name })
+            // .whereRaw('LOWER(name) LIKE ?', [`%${name.toLowerCase()}%`])
+            .where('name', '=', name)
             .first();
 
         if (!tk) {
@@ -351,6 +350,149 @@ server.get('/tk/get-names', async (req, res) => {
         });
     }
 });
+
+// НИЖЕ для админ-панели
+// Получение полных данных
+
+server.get('/api/tk-full-data', async (req, res) => {
+    try {
+        const tkData = await db('tk')
+            .select(
+                'tk.id as tk_id',
+                'tk.name as tk_name',
+                'branches.*',
+                'phones.*'
+            )
+
+            .leftJoin('branches', 'tk.id', 'branches.tk_id')
+
+            .leftJoin('phones', 'branches.id', 'phones.branch_id');
+
+        // Ручная группировка данных
+
+        const grouped = tkData.reduce((acc, row) => {
+            const tk = acc.find((t) => t.id === row.tk_id) || {
+                id: row.tk_id,
+
+                name: row.tk_name,
+
+                branches: [],
+            };
+
+            const branch = tk.branches.find((b) => b.id === row.branch_id) || {
+                id: row.id,
+
+                address: row.address,
+
+                phones: [],
+            };
+
+            if (row.phone) {
+                branch.phones.push({
+                    id: row.phone_id,
+
+                    phone: row.phone,
+
+                    extension: row.extension,
+                });
+            }
+
+            if (!tk.branches.some((b) => b.id === branch.id)) {
+                tk.branches.push(branch);
+            }
+
+            if (!acc.some((t) => t.id === tk.id)) {
+                acc.push(tk);
+            }
+
+            return acc;
+        }, []);
+
+        res.json(grouped);
+    } catch (error) {
+        res.status(500).json({ error: 'Ошибка загрузки данных' });
+    }
+});
+
+// или
+// Получение всех данных
+
+server.get('/api/tk', async (req, res) => {
+    try {
+        const tks = await db('tk').select('*');
+        const branches = await db('branches').select('*');
+        const phones = await db('phones').select('*');
+
+        const data = tks.map((tk) => ({
+            ...tk,
+            branches: branches
+                .filter((b) => b.tk_id === tk.id)
+                .map((b) => ({
+                    ...b,
+                    phones: phones.filter((p) => p.branch_id === b.id),
+                })),
+        }));
+
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: 'Ошибка загрузки данных' });
+    }
+});
+
+// Эндпоинт для ручного добавления
+server.post('/api/tk', async (req, res) => {
+    try {
+        const { name, bid, marker, branches } = req.body;
+
+        // Вставка ТК
+
+        const [tk] = await db('tk')
+            .insert({ name, bid, marker })
+
+            .returning('*');
+
+        // Вставка филиалов и телефонов
+
+        for (const branchData of branches) {
+            const { phones, ...branch } = branchData;
+
+            // Вставка филиала
+
+            const [dbBranch] = await db('branches')
+                .insert({
+                    ...branch,
+
+                    tk_id: tk.id,
+
+                    latitude: parseFloat(branch.latitude),
+
+                    longitude: parseFloat(branch.longitude),
+                })
+
+                .returning('*');
+
+            // Вставка телефонов
+
+            if (phones && phones.length > 0) {
+                await db('phones').insert(
+                    phones.map((phone) => ({
+                        ...phone,
+
+                        branch_id: dbBranch.id,
+                    }))
+                );
+            }
+        }
+
+        res.status(201).json(tk);
+    } catch (error) {
+        console.error('Create error:', error);
+
+        res.status(500).json({ error: 'Ошибка создания ТК' });
+    }
+});
+
+
 
 module.exports = server;
 
