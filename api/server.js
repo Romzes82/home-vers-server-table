@@ -42,17 +42,17 @@ server.get('/delivery', async (req, res) => {
     }
 });
 
-server.post('/todos', (req, res) => {
-    //POST a todo
-});
+// server.post('/todos', (req, res) => {
+//     //POST a todo
+// });
 
-server.put('/todos/:id', (req, res) => {
-    //UPDATE a todo
-});
+// server.put('/todos/:id', (req, res) => {
+//     //UPDATE a todo
+// });
 
-server.delete('/todos/:id', (req, res) => {
-    //DELETE a todo
-});
+// server.delete('/todos/:id', (req, res) => {
+//     //DELETE a todo
+// });
 
 // Получение данных по массиву номеров для транспортных компаний
 server.post('/tk/get-by-numbers', async (req, res) => {
@@ -64,18 +64,46 @@ server.post('/tk/get-by-numbers', async (req, res) => {
         }
 
         const normalizeNumber = (stringWithNumbers) => {
-            const str = stringWithNumbers.match(/(?:\+|\d)[\d\-\(\) ]{7,}\d/g);
-            if (!str) return [];
-            return str.map((num) => num.replace(/\D/g, ''));
+            // const str = stringWithNumbers.match(/(?:\+|\d)[\d\-\(\) ]{7,}\d/g);
+            // if (!str) return [];
+            // return str.map((num) => num.replace(/\D/g, ''));
+            const str = 
+                stringWithNumbers.match(/(?:\+|\d)[\d\-\(\) ]{5,}\d/g); // минимальная длина 1(начало) + 5 + 1 (конец) = 7
+            return str.map((num) => {
+                const digits = num.replace(/\D/g, '');
+                return digits.length > 10 ? digits.slice(-10) : digits;
+            });
         };
 
+        // -${searchNumberLength.length}
         for (const num of numbers) {
             try {
-                const normalized = normalizeNumber(num);
+                // const normalized = normalizeNumber(num);
+                // console.log('--------------normalized');
+                // console.log(normalized);
+                // console.log(num);
+                const normalized = [num];
+
+                let searchNumber = normalized.join('');
+                searchNumber =
+                    searchNumber.length > 10
+                        ? searchNumber.slice(-10)
+                        : searchNumber;
+
+                // searchNumber =
+                //     searchNumber.length > 10
+                //         ? searchNumber.slice(-10)
+                //         : searchNumber;
+                const searchNumberLength = searchNumber.length;
                 const phoneRecord = await db('phones')
                     .whereRaw(
-                        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, '-', ''), ' ', ''), '+', ''), '(', ''), ')', '') = ?",
-                        normalized.join('') // Нормализуем номер до строки
+                        // "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, '-', ''), ' ', ''), '+', ''), '(', ''), ')', '') = ?",
+                        `SUBSTR(
+                            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, '-', ''), ' ', ''), '+', ''), '(', ''), ')', ''),
+                            -${searchNumberLength}
+                        ) = ?`,
+                        [searchNumber]
+                        // normalized.join('') // Нормализуем номер до строки
                     )
                     .first();
 
@@ -643,7 +671,7 @@ server.get('/api/tk-full-data', async (req, res) => {
 });
 
 // или
-// Получение всех данных
+// Получение get всех данных
 
 server.get('/api/tk', async (req, res) => {
     try {
@@ -667,7 +695,7 @@ server.get('/api/tk', async (req, res) => {
     }
 });
 
-// Эндпоинт для ручного добавления
+// Эндпоинт post для ручного добавления
 server.post('/api/tk', async (req, res) => {
     try {
         const { name, bid, marker, branches } = req.body;
@@ -721,7 +749,7 @@ server.post('/api/tk', async (req, res) => {
 });
 
 // Эндпоинт для загрузки ТК Excel
-server.post('/api/uploadAAA', upload.single('file'), async (req, res) => {
+server.post('/api/upload', upload.single('file'), async (req, res) => {
     try {
         const workbook = XLSX.readFile(req.file.path);
 
@@ -890,6 +918,19 @@ server.post('/api/upload-only-bid-and-marker', upload.single('file'), async (req
             error: 'Ошибка обработки файла',
             details: error.message,
         });
+    }
+});
+
+// Эндпоинт для удаления tk по id
+server.delete('/api/tk/:id', async (req, res) => {
+    try {
+        await db('tk').where({ id: req.params.id }).del();
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        console.error('Delete error:', error);
+
+        res.status(500).json({ error: 'Ошибка удаления доставки' });
     }
 });
 
@@ -1378,6 +1419,130 @@ server.post('/api/upload-delivery', upload.single('file'), async (req, res) => {
     // }
 });
 
+// Эндпоинт для загрузки доставок из xlsx в бд
+server.post('/api/add-delivery', async (req, res) => {
+    const errors = [];
+
+    const transaction = await db.transaction();
+
+    try {
+        const { inn, client, address, date, latitude, longitude } = req.body;
+
+        // Нормализация данных
+
+        const normalizedInn = inn?.toString().replace(/\.0$/, '').trim() || '';
+
+        const normalizedClient = client?.toString().trim() || '';
+
+        const normalizedAddress = address?.toString().trim() || '';
+
+        // Валидация обязательных полей
+
+        const requiredFields = [
+            { field: normalizedInn, name: 'ИНН' },
+
+            { field: normalizedClient, name: 'Клиент' },
+
+            { field: normalizedAddress, name: 'Адрес' },
+
+            { field: date, name: 'Дата' },
+        ];
+
+        requiredFields.forEach(({ field, name }) => {
+            if (!field)
+                errors.push(`Поле '${name}' обязательно для заполнения`);
+        });
+
+        if (errors.length > 0) {
+            await transaction.rollback();
+
+            return res.status(400).json({
+                success: false,
+
+                errors,
+            });
+        }
+
+        // Форматирование даты
+
+        let formattedDate;
+
+        try {
+            formattedDate = formatDeliveryDate(date);
+        } catch (dateError) {
+            await transaction.rollback();
+
+            return res.status(400).json({
+                success: false,
+
+                errors: [dateError.message],
+            });
+        }
+
+        // UPSERT для таблицы delivery
+
+        const [delivery] = await transaction('delivery')
+            .insert({
+                inn: normalizedInn,
+
+                client: normalizedClient,
+            })
+
+            .onConflict(['inn', 'client'])
+
+            .merge()
+
+            .returning('id');
+
+        // UPSERT для таблицы address_delivery
+
+        await transaction('address_delivery')
+            .insert({
+                delivery_id: delivery.id,
+
+                address: normalizedAddress,
+
+                date: formattedDate,
+
+                latitude,
+
+                longitude,
+            })
+
+            .onConflict(['delivery_id', 'address'])
+
+            .merge({
+                date: formattedDate,
+
+                latitude,
+
+                longitude,
+            });
+
+        await transaction.commit();
+
+        res.status(201).json({
+            success: true,
+
+            message: 'Данные успешно добавлены/обновлены',
+
+            deliveryId: delivery.id,
+        });
+    } catch (error) {
+        await transaction.rollback();
+
+        console.error('Ошибка добавления доставки:', error);
+
+        res.status(500).json({
+            success: false,
+
+            error: 'Ошибка обработки запроса',
+
+            details: error.message,
+        });
+    }
+});
+
 // Эндпоинт для получения данных
 server.get('/api/delivery', async (req, res) => {
     try {
@@ -1397,7 +1562,7 @@ server.get('/api/delivery', async (req, res) => {
     }
 });
 
-// Эндпоинт для удаления
+// Эндпоинт для удаления в доставках по id
 server.delete('/api/delivery/:id', async (req, res) => {
     try {
         await db('delivery').where({ id: req.params.id }).del();
@@ -1441,7 +1606,48 @@ server.delete('/api/delivery-all', async (req, res) => {
     }
 });
 
+// Эндпоинт для определения по адресу координат и первого самого похожего адреса 
+server.get('/geo/get-coords-by-address', async (req, res) => {
+    try {
+        const { address } = req.query;
 
+        if (!address) {
+            return res
+                .status(400)
+                .json({ error: 'Address parameter is required' });
+        }
+
+        const geoRes = await fetch(
+            `https://geocode-maps.yandex.ru/1.x/?apikey=${YANDEX_API_KEY}&format=json&geocode=${encodeURIComponent(
+                address
+            )}`
+        );
+
+        const geoData = await geoRes.json();
+
+        if (!geoData.response.GeoObjectCollection.featureMember.length) {
+            return res.status(404).json({ error: 'Address not found' });
+        }
+
+        const [lng, lat] =
+            geoData.response.GeoObjectCollection.featureMember[0].GeoObject.Point.pos.split(
+                ' '
+            );
+
+        res.json({
+            address,
+            latitude: lat,
+            longitude: lng,
+            fullAddress:
+                geoData.response.GeoObjectCollection.featureMember[0].GeoObject
+                    .metaDataProperty.GeocoderMetaData.text,
+        });
+    } catch (error) {
+        console.error('Geocoding error:', error);
+
+        res.status(500).json({ error: 'Geocoding failed' });
+    }
+});
 
 module.exports = server;
 

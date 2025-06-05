@@ -1,7 +1,7 @@
 //  обновление seeds и миграции(предварительно удалив бд):
 // если нужен полный сброс, то npx knex migrate:rollback --all
-//  npx knex migrate:latest
-//  npx knex seed:run
+//  npx knex migrate:latest, то что пересоздает, формирует структуру бд по новым правилам в миграциях
+//  npx knex seed:run, в принципе сиды уже не нужна на продакшине
 
 exports.up = async function (knex) {
     const exists = await knex.schema.hasTable('tk');
