@@ -503,7 +503,7 @@ server.get('/tk/get-by-name', async (req, res) => {
 
 // Получение данных по инн и названию клиента
 server.get('/delivery/get-by-inn-and-client', async (req, res) => {
-    const { inn, client } = req.query;
+    const { inn = "0", client } = req.query;
 
     // Валидация входных параметров
     if (!inn || !client) {
@@ -924,15 +924,40 @@ server.post('/api/upload-only-bid-and-marker', upload.single('file'), async (req
 // Эндпоинт для удаления tk по id
 server.delete('/api/tk/:id', async (req, res) => {
     try {
-        await db('tk').where({ id: req.params.id }).del();
+        const { id } = req.params;
+
+        // 1. Находим все филиалы ТК
+        const branches = await db('branches').where({ tk_id: id }).select('id');
+
+        // 2. Удаляем все телефоны этих филиалов
+        const branchIds = branches.map((b) => b.id);
+        await db('phones').whereIn('branch_id', branchIds).del();
+
+        // 3. Удаляем все филиалы ТК
+        await db('branches').where({ tk_id: id }).del();
+
+        // 4. Удаляем саму ТК
+        await db('tk').where({ id }).del();
 
         res.status(200).json({ success: true });
     } catch (error) {
         console.error('Delete error:', error);
-
-        res.status(500).json({ error: 'Ошибка удаления доставки' });
+        res.status(500).json({
+            error: 'Ошибка удаления ТК и связанных данных',
+        });
     }
 });
+// server.delete('/api/tk/:id', async (req, res) => {
+//     try {
+//         await db('tk').where({ id: req.params.id }).del();
+
+//         res.status(200).json({ success: true });
+//     } catch (error) {
+//         console.error('Delete error:', error);
+
+//         res.status(500).json({ error: 'Ошибка удаления доставки' });
+//     }
+// });
 
 // Вспомогательная функция для преобразования даты в формат DDMMYYYY и далеее в YYYY-MM-DD
 const formatDeliveryDate = (input) => {
@@ -1318,7 +1343,7 @@ const formatDeliveryDate = (input) => {
 //     // }
 // });
 
-// 1.3.Эндпоинт для загрузки доставок из xlsx в бд
+// 1.3.Эндпоинт для загрузки/обновления доставок из xlsx в бд
 server.post('/api/upload-delivery', upload.single('file'), async (req, res) => {
     const errors = [];
 
@@ -1419,7 +1444,7 @@ server.post('/api/upload-delivery', upload.single('file'), async (req, res) => {
     // }
 });
 
-// Эндпоинт для загрузки доставок из xlsx в бд
+// Эндпоинт для загрузки доставок из готовой web таблицы в бд
 server.post('/api/add-delivery', async (req, res) => {
     const errors = [];
 
@@ -1575,8 +1600,77 @@ server.delete('/api/delivery/:id', async (req, res) => {
     }
 });
 
+/**
+ * Удаление конкретного адреса доставки
+ * DELETE /api/delivery/:deliveryId/address/:addressId
+ * 
+ * Использует правильные названия таблиц из миграции:
+ * - delivery (основная таблица компаний)
+ * - address_delivery (таблица адресов)
+ */
+server.delete('/api/delivery/:deliveryId/address/:addressId', async (req, res) => {
+  try {
+    const { deliveryId, addressId } = req.params;
+
+    // 1. Проверяем существование компании
+    const company = await db('delivery')
+      .where({ id: deliveryId })
+      .first();
+
+    if (!company) {
+      return res.status(404).json({
+        error: 'Компания не найдена',
+        details: `Delivery с ID ${deliveryId} не существует`
+      });
+    }
+
+    // 2. Проверяем существование адреса и его принадлежность
+    const address = await db('address_delivery')
+      .where({
+        id: addressId,
+        delivery_id: deliveryId
+      })
+      .first();
+
+    if (!address) {
+      return res.status(404).json({
+        error: 'Адрес не найден',
+        details: `Адрес с ID ${addressId} не принадлежит компании ${deliveryId} или не существует`
+      });
+    }
+
+    // 3. Удаляем адрес (включая каскадное удаление, если настроено)
+    await db('address_delivery')
+      .where({ id: addressId })
+      .del();
+
+    res.json({
+      success: true,
+      message: `Адрес ${addressId} компании ${deliveryId} успешно удален`,
+      deletedAddress: {
+        id: address.id,
+        address: address.address,
+        date: address.date
+      },
+      remainingAddresses: await db('address_delivery')
+        .where({ delivery_id: deliveryId })
+        .count('* as count')
+        .first()
+        .then(res => res.count)
+    });
+
+  } catch (error) {
+    console.error('Ошибка удаления адреса:', error);
+    res.status(500).json({
+      error: 'Ошибка сервера при удалении адреса',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      hint: 'Используется таблица address_delivery'
+    });
+  }
+});
+
 // Эндпоинт для полной очистки данных в delivery
-server.delete('/api/delivery-all', async (req, res) => {
+server.delete('ОПАСНО /api/delivery-all', async (req, res) => {
     try {
         await db.transaction(async (trx) => {
             // Удаление всех адресов доставки
@@ -1647,6 +1741,109 @@ server.get('/geo/get-coords-by-address', async (req, res) => {
 
         res.status(500).json({ error: 'Geocoding failed' });
     }
+});
+
+
+
+/**
+ * Полная очистка базы данных транспортных компаний
+ * Удаляет ВСЕ данные в правильном порядке:
+ * 1. Телефоны (phones)
+ * 2. Филиалы (branches)
+ * 3. ТК (tk)
+ */
+server.delete('ОПАСНО УДАЛИТ ВСЕ ТК/api/tk-purge', async (req, res) => {
+  try {
+    // Транзакция для атомарности
+    await db.transaction(async trx => {
+      // 1. Удаляем все телефоны
+      await trx('phones').del();
+      
+      // 2. Удаляем все филиалы
+      await trx('branches').del();
+      
+      // 3. Удаляем все транспортные компании
+      await trx('tk').del();
+    });
+
+    res.json({ 
+      success: true,
+      message: 'Все ТК, филиалы и телефоны успешно удалены'
+    });
+  } catch (error) {
+    console.error('DB purge error:', error);
+    res.status(500).json({ 
+      error: 'Ошибка при очистке базы данных',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * POST запрос. Очистка базы данных от битых ссылок и дубликатов
+ * Удаляет:
+ * 1. Телефоны, привязанные к несуществующим филиалам
+ * 2. Филиалы, привязанные к несуществующим ТК
+ * 3. Дубликаты телефонов (оставляет только первую запись)
+ */
+server.post('НЕ ЗАПУСКАТЬ, удаляет все повторяющиеся телефоны/api/db-cleanup', async (req, res) => {
+  try {
+    // 1. Удаляем телефоны с несуществующими branch_id
+    const phonesDeleted = await db('phones')
+      .whereNotExists(
+        db.select('*').from('branches').whereRaw('branches.id = phones.branch_id')
+      )
+      .del();
+
+    // 2. Удаляем филиалы с несуществующими tk_id
+    const branchesDeleted = await db('branches')
+      .whereNotExists(
+        db.select('*').from('tk').whereRaw('tk.id = branches.tk_id')
+      )
+      .del();
+
+    // 3. Удаляем дубликаты телефонов (оставляем первый вариант)
+    const duplicatePhones = await db('phones')
+      .select('phone')
+      .groupBy('phone')
+      .havingRaw('COUNT(*) > 1');
+
+    let duplicatesDeleted = 0;
+    
+    for (const { phone } of duplicatePhones) {
+      // Находим ID всех дубликатов
+      const duplicates = await db('phones')
+        .select('id')
+        .where({ phone })
+        .orderBy('id');
+      
+      // Оставляем первую запись, остальные удаляем
+      const idsToDelete = duplicates.slice(1).map(d => d.id);
+      
+      if (idsToDelete.length > 0) {
+        const count = await db('phones')
+          .whereIn('id', idsToDelete)
+          .del();
+        
+        duplicatesDeleted += count;
+      }
+    }
+
+    res.json({
+      success: true,
+      stats: {
+        orphaned_phones_deleted: phonesDeleted,
+        orphaned_branches_deleted: branchesDeleted,
+        duplicate_phones_deleted: duplicatesDeleted
+      }
+    });
+  } catch (error) {
+    console.error('DB cleanup error:', error);
+    res.status(500).json({ 
+      error: 'Ошибка очистки базы данных',
+      details: error.message 
+    });
+  }
 });
 
 module.exports = server;
